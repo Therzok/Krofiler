@@ -30,7 +30,8 @@ namespace Mono.Profiler.Log
 		public LogProcessor(string fileName, LogEventVisitor visitor)
 		{
 			Batteries_V2.Init();
-			Stream = new FileStream(fileName, FileMode.Open, FileAccess.Read, FileShare.Read);
+			const int bufferSize = 256 * 1024; // 64kb buffer, we are dealing with large files here.
+			Stream = new FileStream(fileName, FileMode.Open, FileAccess.Read, FileShare.Read, bufferSize, FileOptions.SequentialScan);
 			Visitor = visitor;
 		}
 
