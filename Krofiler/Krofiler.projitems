@@ -27,6 +27,7 @@
     <Compile Include="$(MSBuildThisFileDirectory)Utils\DbUtils.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Logic\LazyObjectsList.cs" />
     <Compile Include="$(MSBuildThisFileDirectory)Utils\PrettyPrint.cs" />
+    <Compile Include="$(MSBuildThisFileDirectory)Utils\ProfileBlock.cs" />
   </ItemGroup>
   <ItemGroup>
     <Folder Include="$(MSBuildThisFileDirectory)Logic\" />
