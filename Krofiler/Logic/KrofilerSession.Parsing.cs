@@ -7,6 +7,7 @@ using System.Diagnostics;
 using System.Linq;
 using Mono.Profiler.Log;
 using SQLitePCL;
+using Krofiler.Utils;
 
 namespace Krofiler
 {
@@ -77,18 +78,20 @@ namespace Krofiler
 			ProcessId = header.ProcessId;
 			var cancellationToken = cts.Token;
 
-			try {
-				processor = new LogProcessor(fileToProcess, new KrofilerLogEventVisitor(this));
-				processor.Process(cancellation, runner != null);
-				if (cancellation.IsCancellationRequested)
-					completionSource.SetCanceled();
-				else
-					completionSource.SetResult(true);
-			} catch (Exception e) {
-				if (cancellation.IsCancellationRequested)
-					completionSource.SetCanceled();
-				else
-					completionSource.SetException(e);
+			using (var timer = new ProfileBlock("Parse MLPD")) {
+				try {
+					processor = new LogProcessor(fileToProcess, new KrofilerLogEventVisitor(this));
+					processor.Process(cancellation, runner != null);
+					if (cancellation.IsCancellationRequested)
+						completionSource.SetCanceled();
+					else
+						completionSource.SetResult(true);
+				} catch (Exception e) {
+					if (cancellation.IsCancellationRequested)
+						completionSource.SetCanceled();
+					else
+						completionSource.SetException(e);
+				}
 			}
 
 			Finished?.Invoke(this);

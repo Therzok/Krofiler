@@ -5,7 +5,7 @@ namespace Krofiler.Utils
 {
 	public class ProfileBlock : IDisposable
 	{
-		readonly Stopwatch sw = new Stopwatch();
+		readonly Stopwatch sw = Stopwatch.StartNew ();
 		readonly string header;
 
 		public ProfileBlock(string header)
