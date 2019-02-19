@@ -29,19 +29,21 @@ namespace Krofiler
 				Address INT NOT NULL,
 				TypeId INT NOT NULL,
 				Allocation INT NOT NULL,
-				Size INT NOT NULL
+				Size INT NOT NULL,
+				RootKind INT NOT NULL
 			)"));
 			check_ok(objsDb, raw.sqlite3_exec(objsDb, "BEGIN TRANSACTION;"));
-			check_ok(objsDb, raw.sqlite3_prepare_v2(objsDb, "INSERT INTO Objs(Address, TypeId, Allocation, Size) VALUES(?,?,?,?)", out objsInsertStmt));
+			check_ok(objsDb, raw.sqlite3_prepare_v2(objsDb, "INSERT INTO Objs(Address, TypeId, Allocation, Size, RootKind) VALUES(?,?,?,?,?)", out objsInsertStmt));
 			check_ok(objsDb, raw.sqlite3_prepare_v2(objsDb, "SELECT Allocation, TypeId, Size FROM Objs WHERE Address=?", out objSelectObjInfo));
 		}
 
-		internal void Insert(long addr, long typeId, ulong alloc, long size)
+		internal void Insert(long addr, long typeId, ulong alloc, long size, LogHeapRootSource rootKind)
 		{
 			check_ok(objsDb, raw.sqlite3_bind_int64(objsInsertStmt, 1, addr));
 			check_ok(objsDb, raw.sqlite3_bind_int64(objsInsertStmt, 2, typeId));
 			check_ok(objsDb, raw.sqlite3_bind_int64(objsInsertStmt, 3, (long)alloc));
 			check_ok(objsDb, raw.sqlite3_bind_int64(objsInsertStmt, 4, size));
+			check_ok(objsDb, raw.sqlite3_bind_int64(objsInsertStmt, 5, (long)rootKind));
 			var result = raw.sqlite3_step(objsInsertStmt);
 			if (raw.SQLITE_DONE != result)
 				check_ok(objsDb, result);
@@ -200,6 +202,17 @@ namespace Krofiler
 
 		static readonly Comparison<long[]> sortByLength = (x, y) => x.Length.CompareTo(y.Length);
 
+		public bool TryGetRootKind(long addr, out LogHeapRootSource source)
+		{
+			source = (LogHeapRootSource)(-1);
+
+			if (Roots.TryGetValue (addr, out var root)) {
+				source = root.HeapRootRegisterEvent_Source;
+				return true;
+			}
+			return false;
+		}
+
 		public List<long[]> GetTop5PathsToRoots(long addr)
 		{
 			if (cachedAddr == addr && cachedResult != null)
@@ -230,9 +243,9 @@ namespace Krofiler
 				var result = new List<ObjectInfo>(limit);
 				sqlite3_stmt query;
 				if (string.IsNullOrEmpty(orderByColum))
-					DbUtils.check_ok(db, raw.sqlite3_prepare_v2(db, $"SELECT Address, Allocation, Size FROM Objs WHERE TypeId=? LIMIT {limit}", out query));
+					DbUtils.check_ok(db, raw.sqlite3_prepare_v2(db, $"SELECT Address, Allocation, Size FROM Objs WHERE TypeId=? AND RootKind <> 2 LIMIT {limit}", out query));
 				else
-					DbUtils.check_ok(db, raw.sqlite3_prepare_v2(db, $"SELECT Address, Allocation, Size FROM Objs WHERE TypeId=? ORDER BY {orderByColum} {(descending ? "DESC" : "ASC")} LIMIT {limit}", out query));
+					DbUtils.check_ok(db, raw.sqlite3_prepare_v2(db, $"SELECT Address, Allocation, Size FROM Objs WHERE TypeId=? AND RootKind <> 2 ORDER BY {orderByColum} {(descending ? "DESC" : "ASC")} LIMIT {limit}", out query));
 				DbUtils.check_ok(db, raw.sqlite3_bind_int64(query, 1, typeId));
 				int res;
 				while ((res = raw.sqlite3_step(query)) == raw.SQLITE_ROW) {
@@ -248,23 +261,66 @@ namespace Krofiler
 			}
 		}
 		Dictionary<long, LazyObjectsList> cachedTypesToObjectsListMap;
+		Dictionary<long, LazyObjectsList> cachedTypesToFinalizeableObjectsListMap;
+		Dictionary<long, LazyObjectsList> cachedTypesToNonFinalizeableObjectsListMap;
 		public Dictionary<long, LazyObjectsList> TypesToObjectsListMap {
 			get {
-				if (cachedTypesToObjectsListMap != null)
-					return cachedTypesToObjectsListMap;
-				cachedTypesToObjectsListMap = new Dictionary<long, LazyObjectsList>();
-				DbUtils.check_ok(objsDb, raw.sqlite3_prepare_v2(objsDb, "SELECT TypeId, Count(Address), Sum(Size) FROM Objs GROUP BY TypeId", out var stmt));
-				int res;
-				while ((res = raw.sqlite3_step(stmt)) == raw.SQLITE_ROW) {
-					long typeId = raw.sqlite3_column_int64(stmt, 0);
-					cachedTypesToObjectsListMap.Add(typeId, new HsTypesList(objsDb, raw.sqlite3_column_int(stmt, 1), raw.sqlite3_column_int64(stmt, 2), typeId));
-				}
-				if (res != raw.SQLITE_DONE)
-					DbUtils.check_ok(objsDb, res);
-				DbUtils.check_ok(objsDb, raw.sqlite3_finalize(stmt));
+				if (cachedTypesToObjectsListMap == null)
+					LoadObjectsFromDatabase();
+
 				return cachedTypesToObjectsListMap;
 			}
 		}
+
+		public Dictionary<long, LazyObjectsList> TypesToNonFinalizableObjectsListMap {
+			get {
+				if (cachedTypesToNonFinalizeableObjectsListMap == null)
+					LoadObjectsFromDatabase();
+
+				return cachedTypesToNonFinalizeableObjectsListMap;
+			}
+		}
+
+		public Dictionary<long, LazyObjectsList> TypesToFinalizableObjectsListMap {
+			get {
+				if (cachedTypesToFinalizeableObjectsListMap == null)
+					LoadObjectsFromDatabase();
+
+				return cachedTypesToFinalizeableObjectsListMap;
+			}
+		}
+
+		void LoadObjectsFromDatabase()
+		{
+			cachedTypesToObjectsListMap = new Dictionary<long, LazyObjectsList>();
+			cachedTypesToFinalizeableObjectsListMap = new Dictionary<long, LazyObjectsList>();
+			cachedTypesToNonFinalizeableObjectsListMap = new Dictionary<long, LazyObjectsList>();
+
+			LoadObjects(cachedTypesToObjectsListMap, "SELECT TypeId, Count(Address), Sum(Size) FROM Objs GROUP BY TypeId");
+			LoadObjects(cachedTypesToFinalizeableObjectsListMap, "SELECT TypeId, Count(Address), Sum(Size) FROM Objs WHERE RootKind = 2 GROUP BY TypeId");
+			LoadObjects(cachedTypesToNonFinalizeableObjectsListMap, "SELECT TypeId, Count(Address), Sum(Size) FROM Objs WHERE RootKind <> 2 GROUP BY TypeId");
+		}
+
+		void LoadObjects(Dictionary<long, LazyObjectsList> into, string statement)
+		{
+			DbUtils.check_ok(objsDb, raw.sqlite3_prepare_v2(objsDb, statement, out sqlite3_stmt stmt));
+
+			int res;
+			while ((res = raw.sqlite3_step(stmt)) == raw.SQLITE_ROW) {
+				long typeId = raw.sqlite3_column_int64(stmt, 0);
+				var count = raw.sqlite3_column_int(stmt, 1);
+				var size = raw.sqlite3_column_int64(stmt, 2);
+
+				var list = new HsTypesList(objsDb, count, size, typeId);
+
+				into.Add(typeId, list);
+			}
+
+			if (res != raw.SQLITE_DONE)
+				DbUtils.check_ok(objsDb, res);
+			DbUtils.check_ok(objsDb, raw.sqlite3_finalize(stmt));
+		}
+
 
 		public Dictionary<long, SuperEvent> CountersDescriptions { get; set; }
 		public CountersRow Counters { get; set; }

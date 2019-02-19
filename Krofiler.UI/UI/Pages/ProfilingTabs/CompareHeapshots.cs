@@ -38,10 +38,14 @@ namespace Krofiler
 			public string TypeName;
 			public long TypeId;
 			public LazyObjectsList NewObjects;
+			public LazyObjectsList NewFinalizableObjects;
+			public LazyObjectsList NonFinalizableObjects;
 			public LazyObjectsList DeadObjects;
+			public LazyObjectsList FinalizableObjects;
 			public LazyObjectsList NewHsObjects;
 			public LazyObjectsList OldHsObjects;
 		}
+
 		TextBox filterTypesTextBox;
 
 		static EmptyObjectsList EmptyList = EmptyObjectsList.Instance;
@@ -58,9 +62,12 @@ namespace Krofiler
 			}
 			var diff = new DiffHeap(oldHeapshot, newHeapshot);
 			var newObjects = diff.NewObjects;
+			var newFinalizableObjects = diff.NewFinalizableObjects;
 			var deleted = diff.DeletedObjects;
 			var allObjectsInOldHs = oldHeapshot.TypesToObjectsListMap;
 			var allObjectsInNewHs = newHeapshot.TypesToObjectsListMap;
+			var allFinalizableObjectsInNewHs = newHeapshot.TypesToFinalizableObjectsListMap;
+			var allNonFinalizableObjectsInNewHs = newHeapshot.TypesToNonFinalizableObjectsListMap;
 			var hashTableAllTypes = new HashSet<long>();
 			foreach (var t in allObjectsInOldHs)
 				hashTableAllTypes.Add(t.Key);
@@ -71,9 +78,12 @@ namespace Krofiler
 					TypeId = typeId,
 					TypeName = session.GetTypeName(typeId),
 					NewObjects = newObjects.ContainsKey(typeId) ? newObjects[typeId] : EmptyList,
+					NewFinalizableObjects = newFinalizableObjects.ContainsKey(typeId) ? newFinalizableObjects[typeId] : EmptyList,
 					DeadObjects = deleted.ContainsKey(typeId) ? deleted[typeId] : EmptyList,
 					OldHsObjects = allObjectsInOldHs.ContainsKey(typeId) ? allObjectsInOldHs[typeId] : EmptyList,
-					NewHsObjects = allObjectsInNewHs.ContainsKey(typeId) ? allObjectsInNewHs[typeId] : EmptyList
+					NewHsObjects = allObjectsInNewHs.ContainsKey(typeId) ? allObjectsInNewHs[typeId] : EmptyList,
+					FinalizableObjects = allFinalizableObjectsInNewHs.ContainsKey(typeId) ? allFinalizableObjectsInNewHs[typeId] : EmptyList,
+					NonFinalizableObjects = allNonFinalizableObjectsInNewHs.ContainsKey(typeId) ? allNonFinalizableObjectsInNewHs[typeId] : EmptyList,
 				});
 			}
 			filterTypesTextBox = new TextBox();
@@ -112,12 +122,20 @@ namespace Krofiler
 				HeaderText = "Diff Size"
 			});
 			typesGrid.Columns.Add(new GridColumn {
-				DataCell = new TextBoxCell { Binding = Binding.Delegate<TypeChangeInfo, string>(r => r.NewHsObjects.Count.ToString()) },
+				DataCell = new TextBoxCell { Binding = Binding.Delegate<TypeChangeInfo, string>(r => r.NonFinalizableObjects.Count.ToString()) },
 				HeaderText = "Objects"
+			});
+			typesGrid.Columns.Add(new GridColumn {
+				DataCell = new TextBoxCell { Binding = Binding.Delegate<TypeChangeInfo, string>(r => r.FinalizableObjects.Count.ToString()) },
+				HeaderText = "Finalizable Objects"
 			});
 			typesGrid.Columns.Add(new GridColumn {
 				DataCell = new TextBoxCell { Binding = Binding.Delegate<TypeChangeInfo, string>(r => r.NewObjects.Count.ToString()) },
 				HeaderText = "New Objects"
+			});
+			typesGrid.Columns.Add(new GridColumn {
+				DataCell = new TextBoxCell { Binding = Binding.Delegate<TypeChangeInfo, string>(r => r.NewFinalizableObjects.Count.ToString()) },
+				HeaderText = "New Finalizable Objects"
 			});
 			typesGrid.Columns.Add(new GridColumn {
 				DataCell = new TextBoxCell { Binding = Binding.Delegate<TypeChangeInfo, string>(r => r.DeadObjects.Count.ToString()) },
@@ -132,48 +150,39 @@ namespace Krofiler
 
 		ContextMenu CreateContextMenu()
 		{
-			var newObjs = new Command() {
-				MenuText = "Select New objects"
-			};
-			newObjs.Executed += (sender, e) => {
-				if (typesGrid.SelectedItem == null) {
-					MessageBox.Show("Select item in list before right-clicking(I know, I know)...");
-					return;
-				}
-				InsertTab(new ObjectListTab(session, newHeapshot, new Dictionary<long, LazyObjectsList>() { { ((TypeChangeInfo)typesGrid.SelectedItem).TypeId, ((TypeChangeInfo)typesGrid.SelectedItem).NewObjects } }), this);
-			};
-			var deadObjs = new Command() {
-				MenuText = "Select Dead objects"
-			};
-			deadObjs.Executed += (sender, e) => {
-				if (typesGrid.SelectedItem == null) {
-					MessageBox.Show("Select item in list before right-clicking(I know, I know)...");
-					return;
-				}
-				InsertTab(new ObjectListTab(session, oldHeapshot, new Dictionary<long, LazyObjectsList>() { { ((TypeChangeInfo)typesGrid.SelectedItem).TypeId, ((TypeChangeInfo)typesGrid.SelectedItem).DeadObjects } }), this);
-			};
-			var newHs = new Command() {
-				MenuText = "Select All in New Heapshot"
-			};
-			newHs.Executed += (sender, e) => {
-				if (typesGrid.SelectedItem == null) {
-					MessageBox.Show("Select item in list before right-clicking(I know, I know)...");
-					return;
-				}
-				InsertTab(new ObjectListTab(session, newHeapshot, new Dictionary<long, LazyObjectsList>() { { ((TypeChangeInfo)typesGrid.SelectedItem).TypeId, ((TypeChangeInfo)typesGrid.SelectedItem).NewHsObjects } }), this);
-			};
-			var oldHs = new Command() {
-				MenuText = "Select All in Old Heapshot"
-			};
-			oldHs.Executed += (sender, e) => {
-				if (typesGrid.SelectedItem == null) {
-					MessageBox.Show("Select item in list before right-clicking(I know, I know)...");
-					return;
-				}
-				InsertTab(new ObjectListTab(session, oldHeapshot, new Dictionary<long, LazyObjectsList>() { { ((TypeChangeInfo)typesGrid.SelectedItem).TypeId, ((TypeChangeInfo)typesGrid.SelectedItem).OldHsObjects } }), this);
-			};
+			var newObjs = CreateCommand("Select New objects", newHeapshot, tci => tci.NewObjects);
+			var deadObjs = CreateCommand("Select Dead objects", oldHeapshot, tci => tci.DeadObjects);
+			var newHs = CreateCommand("Select All in New Heapshot", newHeapshot, tci => tci.NewHsObjects);
+			var oldHs = CreateCommand("Select All in Old Heapshot", oldHeapshot, tci => tci.OldHsObjects);
 
 			return new ContextMenu(newObjs, deadObjs, newHs, oldHs);
+		}
+
+		Command CreateCommand(string text, Heapshot inHeapshot, Func<TypeChangeInfo, LazyObjectsList> objectsToShow)
+		{
+			var cmd = new Command() {
+				MenuText = text,
+			};
+
+			cmd.Executed += (sender, e) => {
+				if (typesGrid.SelectedItem == null) {
+					MessageBox.Show("Select item in list before right-clicking(I know, I know)...");
+					return;
+				}
+
+				var tci = (TypeChangeInfo)typesGrid.SelectedItem;
+
+				InsertTab(new ObjectListTab(
+					session,
+					inHeapshot,
+					new Dictionary<long, LazyObjectsList>() {
+						{ ((TypeChangeInfo)typesGrid.SelectedItem).TypeId, objectsToShow(tci) }
+					}),
+					this
+				);
+			};
+
+			return cmd;
 		}
 	}
 }

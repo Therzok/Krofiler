@@ -190,7 +190,15 @@ namespace Krofiler
 					alloc = allocationsTracker[ev.HeapObjectEvent_ObjectPointer];
 				} catch {
 				}
-				currentHeapshot.Insert(ev.HeapObjectEvent_ObjectPointer,vtableToClass[ev.HeapObjectEvent_VTablePointer], alloc, ev.HeapObjectEvent_ObjectSize);
+
+				LogHeapRootSource rootKind;
+				if (currentHeapshot.Roots.TryGetValue(ev.HeapObjectEvent_ObjectPointer, out var root)) {
+					rootKind = root.HeapRootRegisterEvent_Source;
+				} else {
+					rootKind = (LogHeapRootSource)(-1);
+				}
+
+				currentHeapshot.Insert(ev.HeapObjectEvent_ObjectPointer,vtableToClass[ev.HeapObjectEvent_VTablePointer], alloc, ev.HeapObjectEvent_ObjectSize, rootKind);
 			}
 
 			Dictionary<long, long> vtableToClass = new Dictionary<long, long>();
